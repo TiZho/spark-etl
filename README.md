@@ -263,4 +263,164 @@ class SaleFilter extends Filter[Sale, SalesConfig] {
 }
 ```
 
-This provides a comprehensive starting point for your `spark-etl` framework's README.
+### Example: Composing Filters and Transformers in a Pipeline
+
+Here's an example of a `Pipeline` that demonstrates the composition of `Filter` and `Transformer` components, similar to the `AccessoriesAnalyticsPipeline` you might be familiar with. This example conceptualizes an application log analysis pipeline.
+
+```scala
+package com.github.spark.etl.examples.pipelines
+
+import com.github.spark.etl.core.app.TransformPipeline
+import com.github.spark.etl.core.loader.Loader
+import com.github.spark.etl.core.app.processor.{Filter, Transformer}
+import com.github.spark.etl.core.app.processor.TransformerImplicits._
+import com.github.spark.etl.core.app.processor.FilterImplicits._
+
+// --- Hypothetical Configuration and Data Models ---
+// (Adapt with your own Config, RawLog, ProcessedLog, LogSummary classes)
+
+// Configuration (similar to SalesConfig)
+trait AppSpecificConfig {
+  def app: AppSubConfig
+  // Other specific configurations if needed
+  def minSeverityLevel: Int
+  def targetSubSystem: String
+}
+trait AppSubConfig {
+  def source: SourceSubConfig
+}
+trait SourceSubConfig {
+  def input: String
+}
+case class LogAnalysisConfig(
+  inputPath: String,
+  override val minSeverityLevel: Int,
+  override val targetSubSystem: String
+) extends AppSpecificConfig {
+  override def app: AppSubConfig = new AppSubConfig {
+    override def source: SourceSubConfig = new SourceSubConfig {
+      override def input: String = inputPath
+    }
+  }
+}
+
+// Data Models
+case class RawLog(timestamp: Long, level: Int, subsystem: String, message: String, rawDetails: String)
+case class ProcessedLog(timestamp: Long, level: Int, subsystem: String, message: String, importantInfo: Option[String], isCritical: Boolean)
+case class LogSummary(subsystem: String, criticalCount: Int, warningCount: Int, mostFrequentMessage: Option[String])
+
+// --- Hypothetical Filters (implementing Filter[T, ConfigType]) ---
+// (You would define the actual filtering logic in these classes)
+
+// Filter to keep only logs of a certain severity level or higher
+class SeverityFilter(implicit config: LogAnalysisConfig) extends Filter[RawLog, LogAnalysisConfig] {
+  override def apply(data: RawLog): Boolean = data.level >= config.minSeverityLevel
+  // The `process(dataset: Dataset[RawLog]): Dataset[RawLog]` method would be implemented for Spark
+}
+
+// Filter to keep only logs from a specific subsystem
+class SubSystemFilter(implicit config: LogAnalysisConfig) extends Filter[RawLog, LogAnalysisConfig] {
+  override def apply(data: RawLog): Boolean = data.subsystem == config.targetSubSystem
+}
+
+// Filter to keep only summaries with a significant number of critical alerts
+class CriticalSummaryFilter(implicit config: LogAnalysisConfig) extends Filter[LogSummary, LogAnalysisConfig] {
+  override def apply(data: LogSummary): Boolean = data.criticalCount > 5
+}
+
+// --- Hypothetical Transformers (implementing Transformer[InputType, OutputType]) ---
+// (You would define the actual transformation logic)
+
+// Transformer to parse raw details and identify important information
+class DetailParserTransformer(implicit config: LogAnalysisConfig) extends Transformer[RawLog, ProcessedLog] {
+  override def apply(raw: RawLog): ProcessedLog = {
+    // Parsing and extraction logic (simple example)
+    val important = if (raw.rawDetails.contains("ERROR_CODE")) Some(raw.rawDetails) else None
+    val critical = raw.level >= 5 // Assume 5+ is critical
+    ProcessedLog(raw.timestamp, raw.level, raw.subsystem, raw.message, important, critical)
+  }
+}
+
+// Transformer to enrich the log, e.g., by marking repetitive messages (simplified)
+class EnrichmentTransformer(implicit config: LogAnalysisConfig) extends Transformer[ProcessedLog, ProcessedLog] {
+  override def apply(log: ProcessedLog): ProcessedLog = {
+    // Enrichment logic (example)
+    log.copy(message = s"[ENRICHED] ${log.message}")
+  }
+}
+
+// Transformer to aggregate processed logs into a summary per subsystem
+// Note: An aggregation transformer typically operates on an entire Dataset.
+// The `++` composition assumes the framework can chain transformers
+// where the next one takes the output of the previous one.
+class LogAggregatorTransformer(implicit config: LogAnalysisConfig) extends Transformer[ProcessedLog, LogSummary] {
+  override def apply(log: ProcessedLog): LogSummary = {
+    // This is a simplification for the `apply` example.
+    // True aggregation would happen in `process(dataset: Dataset[ProcessedLog]): Dataset[LogSummary]`.
+    LogSummary(
+      subsystem = log.subsystem,
+      criticalCount = if (log.isCritical) 1 else 0,
+      warningCount = if (log.level == 4) 1 else 0, // Assume 4 = warning
+      mostFrequentMessage = Some(log.message) // Extreme simplification
+    )
+  }
+}
+
+// --- Example Pipeline ---
+class ApplicationLogAnalysisPipeline(implicit config: LogAnalysisConfig)
+  extends TransformPipeline[RawLog, LogSummary, LogAnalysisConfig](
+    config.app.source.input // Input path for source data
+  ) {
+
+  // 1. Define data loading (e.g., from CSV files)
+  override lazy val loader: Loader[RawLog] =
+    Loader.DefaultCsvLoader() // Assume a Loader.DefaultCsvLoader[RawLog]()
+
+  // 2. Define filters BEFORE transformation (filter composition)
+  //    - Keep logs with minimum severity
+  //    - Keep logs for a target subsystem
+  override lazy val preFilter: Filter[RawLog, LogAnalysisConfig] =
+    new SeverityFilter() ++
+    new SubSystemFilter()
+
+  // 3. Define the main transformer (transformer composition)
+  //    - Parse raw log details
+  //    - Enrich log information
+  //    - Aggregate logs to get summaries
+  override lazy val transformer: Transformer[RawLog, LogSummary] =
+    new DetailParserTransformer() ++      // RawLog => ProcessedLog
+    new EnrichmentTransformer() ++    // ProcessedLog => ProcessedLog
+    new LogAggregatorTransformer()    // ProcessedLog => LogSummary (aggregation)
+
+  // 4. Define filters AFTER transformation (can also be a composition)
+  //    - Keep summaries with a sufficient number of critical errors
+  //    OR use Filter.Identity() if no post-transform filter is required.
+  override lazy val postFilter: Filter[LogSummary, LogAnalysisConfig] =
+    new CriticalSummaryFilter() ++
+    Filter.by[LogSummary, LogAnalysisConfig](summary => summary.warningCount > 10) // Additional ad-hoc filter
+}
+
+// To use this pipeline:
+// 1. Ensure base classes (TransformPipeline, Loader, Filter, Transformer)
+//    and implicits (TransformerImplicits, FilterImplicits) exist and are imported.
+// 2. Implement the actual logic in your filters and transformers (especially the `process` methods for Spark).
+// 3. Provide an implicit instance of `LogAnalysisConfig`.
+// 4. Run the pipeline, typically via a `run()` or `process()` method on the pipeline instance.
+
+// Conceptual usage example:
+
+// object MyApp {
+//   def main(args: Array[String]): Unit = {
+//     implicit val spark: SparkSession = SparkSession.builder().appName("LogAnalysis").master("local[*]").getOrCreate() // Required for Spark
+//     implicit val config: LogAnalysisConfig = LogAnalysisConfig(
+//       inputPath = "path/to/your/logs",
+//       minSeverityLevel = 3, // e.g., WARNING and above
+//       targetSubSystem = "payment-service"
+//     )
+
+//     val logPipeline = new ApplicationLogAnalysisPipeline()
+//     logPipeline.run() // or an equivalent method to start the pipeline
+
+//     spark.stop()
+//   }
+// }
