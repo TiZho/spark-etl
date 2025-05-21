@@ -98,20 +98,16 @@ class SalesProcessor(implicit config: SalesConfig)
   extends TransformProcessor[RawSale, Sale, SalesConfig] {
 
   // 1. Define the main pipeline
-  lazy val pipeline: TransformPipeline[RawSale, Sale, SalesConfig] =
-    new SalesPipeline() // Instantiate your custom pipeline
+  lazy val pipeline: TransformPipeline[RawSale, Sale, SalesConfig] = new SalesPipeline() // Instantiate your custom pipeline
 
   // 2. Define post-pipeline transformer (Identity means no change)
-  lazy val postTransformer: Transformer[Sale, Sale] =
-    Transformer.Identity()
+  lazy val postTransformer: Transformer[Sale, Sale]                = Transformer.Identity()
 
   // 3. Define post-pipeline filter (Identity means no filtering)
-  lazy val postFilter: Filter[Sale, SalesConfig] =
-    Filter.Identity()
+  lazy val postFilter: Filter[Sale, SalesConfig]                   = Filter.Identity()
 
   // 4. Define the writer
-  lazy val writer: Writer[Sale] =
-    Writer.DefaultParquetWriter() // Write results as Parquet
+  lazy val writer: Writer[Sale]                                    = Writer.DefaultParquetWriter() // Write results as Parquet
 }
 ```
 
@@ -135,8 +131,7 @@ import pureconfig.generic.auto._ // For automatic config derivation
 object SalesApplication extends TransformApplication[RawSale, Sale, SalesConfig] {
 
   // Instantiate the specific processor for this application
-  lazy val transformProcessor: TransformProcessor[RawSale, Sale, SalesConfig] =
-    new SalesProcessor()
+  lazy val transformProcessor: TransformProcessor[RawSale, Sale, SalesConfig] = new SalesProcessor()
 }
 ```
 
@@ -167,20 +162,16 @@ class SalesPipeline(implicit config: SalesConfig)
   ) {
 
   // 1. Define how to load data
-  override lazy val loader: Loader[RawSale] =
-    Loader.DefaultParquetLoader()
+  override lazy val loader: Loader[RawSale]                = Loader.DefaultParquetLoader()
 
   // 2. Define filter before transformation (Identity = no filter)
-  override lazy val preFilter: Filter[RawSale, SalesConfig] =
-    Filter.Identity()
+  override lazy val preFilter: Filter[RawSale, SalesConfig]  = Filter.Identity()
 
   // 3. Define the main data transformer
-  override lazy val transformer: Transformer[RawSale, Sale] =
-    new RawSaleToSalesTransformer()
+  override lazy val transformer: Transformer[RawSale, Sale]  = new RawSaleToSalesTransformer()
 
   // 4. Define filter after transformation
-  override lazy val postFilter: Filter[Sale, SalesConfig] =
-    new SaleFilter()
+  override lazy val postFilter: Filter[Sale, SalesConfig]    = new SaleFilter()
 }
 ```
 
@@ -209,21 +200,22 @@ class RawSaleToSalesTransformer
 
   // Optional: Case-class level mapping logic
   override def mapping(input: RawSale): Sale =
-    Sale(id = input.id,
-         customerId = input.customerId,
-         customerName = input.customerName,
-         // ... other fields
-         timestamp = Timestamp.valueOf(input.timestamp_str)
-        )
+    Sale(
+      id           = input.id,
+      customerId   = input.customerId,
+      customerName = input.customerName,
+      // ... other fields
+      timestamp    = Timestamp.valueOf(input.timestamp_str)
+    )
 
   // Required: Column-level mapping for DataFrame transformation
   override def mappingCols(): ListMap[String, Column] =
     ListMap(
-        Sale.idCol -> col(RawSale.idCol),
-        Sale.customerIdCol -> col(RawSale.customerIdCol),
-        // ... other direct mappings
-        // Example transformation:
-        Sale.timestampCol -> to_timestamp(col(RawSale.timestamp_strCol), "dd-MM-yyyy HH:mm")
+      Sale.idCol         -> col(RawSale.idCol),
+      Sale.customerIdCol -> col(RawSale.customerIdCol),
+      // ... other direct mappings
+      // Example transformation:
+      Sale.timestampCol  -> to_timestamp(col(RawSale.timestamp_strCol), "dd-MM-yyyy HH:mm")
     )
 }
 ```
@@ -251,15 +243,13 @@ class SaleFilter extends Filter[Sale, SalesConfig] {
 
   // Optional: Case-class level filter logic
   override def filter(implicit config: SalesConfig,
-                       env: Env,
-                       spark: SparkSession): Sale => Boolean =
-    sale => sale.timestamp.after(firstDayOfMonth) // Keep sales after first day of month
+                      env: Env,
+                      spark: SparkSession): Sale => Boolean = sale => sale.timestamp.after(firstDayOfMonth) // Keep sales after first day of month
 
   // Required: Column-level filter logic for DataFrames
   override def filterColumn(implicit config: SalesConfig,
-                             env: Env,
-                             spark: SparkSession): Column =
-    col(Sale.timestampCol) > lit(firstDayOfMonth)
+                            env: Env,
+                            spark: SparkSession): Column       = col(Sale.timestampCol) > lit(firstDayOfMonth)
 }
 ```
 
@@ -293,9 +283,9 @@ trait SourceSubConfig {
   def input: String
 }
 case class LogAnalysisConfig(
-  inputPath: String,
+  inputPath:                     String,
   override val minSeverityLevel: Int,
-  override val targetSubSystem: String
+  override val targetSubSystem:  String
 ) extends AppSpecificConfig {
   override def app: AppSubConfig = new AppSubConfig {
     override def source: SourceSubConfig = new SourceSubConfig {
@@ -308,6 +298,7 @@ case class LogAnalysisConfig(
 case class RawLog(timestamp: Long, level: Int, subsystem: String, message: String, rawDetails: String)
 case class ProcessedLog(timestamp: Long, level: Int, subsystem: String, message: String, importantInfo: Option[String], isCritical: Boolean)
 case class LogSummary(subsystem: String, criticalCount: Int, warningCount: Int, mostFrequentMessage: Option[String])
+
 
 // --- Hypothetical Filters (implementing Filter[T, ConfigType]) ---
 // (You would define the actual filtering logic in these classes)
@@ -328,6 +319,7 @@ class CriticalSummaryFilter(implicit config: LogAnalysisConfig) extends Filter[L
   override def apply(data: LogSummary): Boolean = data.criticalCount > 5
 }
 
+
 // --- Hypothetical Transformers (implementing Transformer[InputType, OutputType]) ---
 // (You would define the actual transformation logic)
 
@@ -336,7 +328,7 @@ class DetailParserTransformer(implicit config: LogAnalysisConfig) extends Transf
   override def apply(raw: RawLog): ProcessedLog = {
     // Parsing and extraction logic (simple example)
     val important = if (raw.rawDetails.contains("ERROR_CODE")) Some(raw.rawDetails) else None
-    val critical = raw.level >= 5 // Assume 5+ is critical
+    val critical  = raw.level >= 5 // Assume 5+ is critical
     ProcessedLog(raw.timestamp, raw.level, raw.subsystem, raw.message, important, critical)
   }
 }
@@ -358,13 +350,14 @@ class LogAggregatorTransformer(implicit config: LogAnalysisConfig) extends Trans
     // This is a simplification for the `apply` example.
     // True aggregation would happen in `process(dataset: Dataset[ProcessedLog]): Dataset[LogSummary]`.
     LogSummary(
-      subsystem = log.subsystem,
-      criticalCount = if (log.isCritical) 1 else 0,
-      warningCount = if (log.level == 4) 1 else 0, // Assume 4 = warning
-      mostFrequentMessage = Some(log.message) // Extreme simplification
+      subsystem           = log.subsystem,
+      criticalCount       = if (log.isCritical) 1 else 0,
+      warningCount        = if (log.level == 4) 1 else 0, // Assume 4 = warning
+      mostFrequentMessage = Some(log.message)             // Extreme simplification
     )
   }
 }
+
 
 // --- Example Pipeline ---
 class ApplicationLogAnalysisPipeline(implicit config: LogAnalysisConfig)
@@ -373,13 +366,12 @@ class ApplicationLogAnalysisPipeline(implicit config: LogAnalysisConfig)
   ) {
 
   // 1. Define data loading (e.g., from CSV files)
-  override lazy val loader: Loader[RawLog] =
-    Loader.DefaultCsvLoader() // Assume a Loader.DefaultCsvLoader[RawLog]()
+  override lazy val loader: Loader[RawLog]                          = Loader.DefaultCsvLoader() // Assume a Loader.DefaultCsvLoader[RawLog]()
 
   // 2. Define filters BEFORE transformation (filter composition)
   //    - Keep logs with minimum severity
   //    - Keep logs for a target subsystem
-  override lazy val preFilter: Filter[RawLog, LogAnalysisConfig] =
+  override lazy val preFilter: Filter[RawLog, LogAnalysisConfig]    =
     new SeverityFilter() ++
     new SubSystemFilter()
 
@@ -387,17 +379,18 @@ class ApplicationLogAnalysisPipeline(implicit config: LogAnalysisConfig)
   //    - Parse raw log details
   //    - Enrich log information
   //    - Aggregate logs to get summaries
-  override lazy val transformer: Transformer[RawLog, LogSummary] =
-    new DetailParserTransformer() ++      // RawLog => ProcessedLog
+  override lazy val transformer: Transformer[RawLog, LogSummary]    =
+    new DetailParserTransformer() ++  // RawLog       => ProcessedLog
     new EnrichmentTransformer() ++    // ProcessedLog => ProcessedLog
     new LogAggregatorTransformer()    // ProcessedLog => LogSummary (aggregation)
 
   // 4. Define filters AFTER transformation (can also be a composition)
   //    - Keep summaries with a sufficient number of critical errors
   //    OR use Filter.Identity() if no post-transform filter is required.
-  override lazy val postFilter: Filter[LogSummary, LogAnalysisConfig] =
+  override lazy val postFilter: Filter[LogSummary, LogAnalysisConfig]=
     new CriticalSummaryFilter() ++
     Filter.by[LogSummary, LogAnalysisConfig](summary => summary.warningCount > 10) // Additional ad-hoc filter
+
 }
 
 // To use this pipeline:
@@ -413,14 +406,14 @@ class ApplicationLogAnalysisPipeline(implicit config: LogAnalysisConfig)
 //   def main(args: Array[String]): Unit = {
 //     implicit val spark: SparkSession = SparkSession.builder().appName("LogAnalysis").master("local[*]").getOrCreate() // Required for Spark
 //     implicit val config: LogAnalysisConfig = LogAnalysisConfig(
-//       inputPath = "path/to/your/logs",
-//       minSeverityLevel = 3, // e.g., WARNING and above
-//       targetSubSystem = "payment-service"
+//       inputPath        = "path/to/your/logs",
+//       minSeverityLevel = 3,                         // e.g., WARNING and above
+//       targetSubSystem  = "payment-service"
 //     )
-
+//
 //     val logPipeline = new ApplicationLogAnalysisPipeline()
 //     logPipeline.run() // or an equivalent method to start the pipeline
-
+//
 //     spark.stop()
 //   }
 // }
@@ -446,29 +439,23 @@ case class SaleWithAgent(
   sale_id: String,
   product_id: String,
   amount: Double,
-  agent_id: String, // from Agent
-  agent_name: String, // from Agent
-  agent_region: String // from Agent
+  agent_id: String,     // from Agent
+  agent_name: String,   // from Agent
+  agent_region: String  // from Agent
   // ... other fields from Sale and Agent as needed
 )
 
-class SalesWithAgentProcessor(implicit config: SalesConfig) 
+class SalesWithAgentProcessor(implicit config: SalesConfig)
   extends TransformProcessor[RawSale, SaleWithAgent, SalesConfig] { // Output type is SaleWithAgent
 
   // SalesPipeline outputs Sale, AgentsPipeline (joinable) outputs Agent.
   // The ~> operator joins them, resulting in SaleWithAgent based on AgentsPipeline's joiner logic.
-  lazy val pipeline: TransformPipeline[RawSale, SaleWithAgent, SalesConfig] =
-    new SalesPipeline() ~> new AgentsPipeline()
+  lazy val pipeline: TransformPipeline[RawSale, SaleWithAgent, SalesConfig] = new SalesPipeline() ~> new AgentsPipeline()
 
   // Other processor components (postTransformer, postFilter, writer)
-  override lazy val postTransformer: Transformer[SaleWithAgent, SaleWithAgent] =
-    Transformer.Identity()
-
-  override lazy val postFilter: Filter[SaleWithAgent, SalesConfig] =
-    Filter.Identity()
-
-  override lazy val writer: Writer[SaleWithAgent] =
-    Writer.DefaultParquetWriter() // Writes the joined SaleWithAgent data
+  override lazy val postTransformer: Transformer[SaleWithAgent, SaleWithAgent] = Transformer.Identity()
+  override lazy val postFilter: Filter[SaleWithAgent, SalesConfig]             = Filter.Identity()
+  override lazy val writer: Writer[SaleWithAgent]                              = Writer.DefaultParquetWriter() // Writes the joined SaleWithAgent data
 }
 ```
 In this example, `SalesPipeline` is assumed to output `Sale` objects, and `AgentsPipeline` (which we'll define as joinable) outputs `Agent` objects. The result of the join, defined by the `AgentsPipeline`'s `joiner`, is `SaleWithAgent`.
@@ -496,7 +483,7 @@ abstract class JoinableTransformPipeline[
   ](source: Datasource)
     extends TransformPipeline[I, O, Conf](source)
     with JoinableSource[O1, O] { // O1 is left (e.g. Sale), O is right (e.g. Agent)
-  
+
   def joiner: DatasourceJoiner[O1, O] // Defines join logic between O1 (left) and O (right)
 }
 ```
@@ -525,9 +512,9 @@ Let's define an `AgentsPipeline` that processes `RawAgent` data into `Agent` dat
 // Assumed output from SalesPipeline (left side of join)
 case class Sale(sale_id: String, product_id: String, amount: Double, agent_id_fk: String /* foreign key to Agent */)
 object Sale { // Companion object for column name constants
-  val sale_idCol = "sale_id"
-  val product_idCol = "product_id"
-  val amountCol = "amount"
+  val sale_idCol     = "sale_id"
+  val product_idCol  = "product_id"
+  val amountCol      = "amount"
   val agent_id_fkCol = "agent_id_fk"
 }
 
@@ -536,19 +523,19 @@ case class RawAgent(id_agent: String, name_agent: String, region_identifier: Str
 // Output for AgentsPipeline (right side of join)
 case class Agent(agent_id: String, agent_name: String, agent_region: String)
 object Agent { // Companion object for column name constants
-  val idCol = "agent_id"
-  val nameCol = "agent_name"
+  val idCol          = "agent_id"
+  val nameCol        = "agent_name"
   val region_codeCol = "agent_region"
 }
 
 // Example Transformer for AgentsPipeline
 class RawAgentToAgentTransformer(implicit config: SalesConfig) extends Transformer[RawAgent, Agent] {
-  override def apply(raw: RawAgent): Agent = 
+  override def apply(raw: RawAgent): Agent =
     Agent(raw.id_agent, raw.name_agent, raw.region_identifier)
   // Implement mappingCols() if you need DataFrame-level transformation logic for this transformer.
   override def mappingCols(): ListMap[String, Column] = ListMap(
-    Agent.idCol -> col("id_agent"),
-    Agent.nameCol -> col("name_agent"),
+    Agent.idCol          -> col("id_agent"),
+    Agent.nameCol        -> col("name_agent"),
     Agent.region_codeCol -> col("region_identifier")
   )
 }
@@ -568,10 +555,10 @@ class AgentsPipeline(implicit config: SalesConfig)
     config.app.sources.agentsInput // Example: provides the Datasource for agents
   ) {
 
-  override lazy val loader: Loader[RawAgent] = Loader.DefaultCsvLoader[RawAgent]() // Example loader
-  override lazy val preFilter: Filter[RawAgent, SalesConfig] = Filter.Identity()
+  override lazy val loader: Loader[RawAgent]                = Loader.DefaultCsvLoader[RawAgent]() // Example loader
+  override lazy val preFilter: Filter[RawAgent, SalesConfig]  = Filter.Identity()
   override lazy val transformer: Transformer[RawAgent, Agent] = new RawAgentToAgentTransformer()
-  override lazy val postFilter: Filter[Agent, SalesConfig] = Filter.Identity()
+  override lazy val postFilter: Filter[Agent, SalesConfig]    = Filter.Identity()
 
   override def joiner: DatasourceJoiner[Sale, Agent] = new DatasourceJoiner[Sale, Agent] {
     // Sale is O1 (left DataFrame), Agent is O (right DataFrame)
@@ -590,7 +577,7 @@ class AgentsPipeline(implicit config: SalesConfig)
       Sale.agent_id_fkCol -> Agent.idCol // Join Sale.agent_id_fk with Agent.agent_id
     )
 
-    override def joinType: String = "left_outer" // Example: keep all sales, add agent info if available
+    override def joinType: String                    = "left_outer" // Example: keep all sales, add agent info if available
   }
 }
 ```
@@ -601,23 +588,17 @@ The `source("col_name")` refers to columns from the `Sale` DataFrame (output of 
 The framework also includes a `DatasourceJoiner` companion object, which you provided:
 ```scala
 object DatasourceJoiner {
-  lazy val delimiter: Char      = '$'
-  lazy val sourcePrefix: String = s"source$delimiter"
-  lazy val targetPrefix: String = s"target$delimiter"
+  val SourcePrefix = "source$"
+  val TargetPrefix = "target$"
 
-  def prefixColumns(df: DataFrame, prefix: String): DataFrame = {
-    val existingColumns = df.columns
-    val aliasedColumns =
-      existingColumns.map(columnName => col(columnName).alias(s"$prefix$columnName"))
-    df.select(aliasedColumns: _*)
-  }
+  def prefixedRenameSource(mappingCol: ListMap[String, Column]): ListMap[String, Column] =
+    mappingCol.map { case (key, value) => key -> value.as(s"$SourcePrefix$key") }
 
-  def renameColumnsAfterJoin(joinedDF: DataFrame, mapping: ListMap[String, Column]): DataFrame =
-    mapping.foldLeft(joinedDF) { case (accDF, (key, value)) => accDF.withColumn(key, value) }
+  def prefixedRenameTarget(mappingCol: ListMap[String, Column]): ListMap[String, Column] =
+    mappingCol.map { case (key, value) => key -> value.as(s"$TargetPrefix$key") }
 
-  // @deprecated def extractColumnsAfterJoin ... 
+  def apply[S <: Product: Encoder: ClassTag, T <: Product: Encoder: ClassTag](): DatasourceJoiner[S, T] =
+    new DatasourceJoiner[S, T] {} // Default empty implementation
 }
 ```
-This object provides constants (like `delimiter`, `sourcePrefix`, `targetPrefix`) and utility functions (`prefixColumns`, `renameColumnsAfterJoin`) that are used internally by the framework to manage column name disambiguation during the join process and to apply the final schema mapping. You typically don't interact with this companion object directly when defining your join logic within the `joiner` instance; it's part of the underlying mechanics.
-
-By following these patterns, you can effectively join data from different processing pipelines within the `spark-etl` framework.
+This object provides constants and utility functions used internally by the framework when performing joins. Specifically, `prefixedRenameSource` and `prefixedRenameTarget` are used to temporarily rename columns from the source (left) and target (right) DataFrames with prefixes. This helps avoid ambiguity if both DataFrames have columns with the same name before the join. The `source()` and `target()` methods you use in your `mappingColumn` definition implicitly handle these prefixed names, allowing you to refer to original column names clearly.
