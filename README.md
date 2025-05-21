@@ -424,6 +424,7 @@ class ApplicationLogAnalysisPipeline(implicit config: LogAnalysisConfig)
 //     spark.stop()
 //   }
 // }
+```
 
 ### Joining Two Pipelines
 
