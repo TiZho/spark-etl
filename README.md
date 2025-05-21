@@ -424,3 +424,199 @@ class ApplicationLogAnalysisPipeline(implicit config: LogAnalysisConfig)
 //     spark.stop()
 //   }
 // }
+
+### Joining Two Pipelines
+
+The `spark-etl` framework allows you to join the outputs of two distinct pipelines. This is useful when you need to combine data from different sources or processing streams. The join operation is facilitated by the `~>` operator and the `JoinableTransformPipeline`.
+
+#### 1. High-Level Usage in `TransformProcessor`
+
+You can define a pipeline that joins two sub-pipelines within your `TransformProcessor` using the `~>` operator. The left-hand side is a standard `TransformPipeline`, and the right-hand side must be a `JoinableTransformPipeline`.
+
+First, ensure you have the necessary implicits:
+```scala
+import com.github.spark.etl.core.app.processor.TransformPipelineImplicits._
+```
+
+Then, define your processor. The output type of the processor and its main `pipeline` should reflect the schema of the data after the join.
+```scala
+// Define the expected output case class after the join
+case class SaleWithAgent(
+  sale_id: String,
+  product_id: String,
+  amount: Double,
+  agent_id: String, // from Agent
+  agent_name: String, // from Agent
+  agent_region: String // from Agent
+  // ... other fields from Sale and Agent as needed
+)
+
+class SalesWithAgentProcessor(implicit config: SalesConfig) 
+  extends TransformProcessor[RawSale, SaleWithAgent, SalesConfig] { // Output type is SaleWithAgent
+
+  // SalesPipeline outputs Sale, AgentsPipeline (joinable) outputs Agent.
+  // The ~> operator joins them, resulting in SaleWithAgent based on AgentsPipeline's joiner logic.
+  lazy val pipeline: TransformPipeline[RawSale, SaleWithAgent, SalesConfig] =
+    new SalesPipeline() ~> new AgentsPipeline()
+
+  // Other processor components (postTransformer, postFilter, writer)
+  override lazy val postTransformer: Transformer[SaleWithAgent, SaleWithAgent] =
+    Transformer.Identity()
+
+  override lazy val postFilter: Filter[SaleWithAgent, SalesConfig] =
+    Filter.Identity()
+
+  override lazy val writer: Writer[SaleWithAgent] =
+    Writer.DefaultParquetWriter() // Writes the joined SaleWithAgent data
+}
+```
+In this example, `SalesPipeline` is assumed to output `Sale` objects, and `AgentsPipeline` (which we'll define as joinable) outputs `Agent` objects. The result of the join, defined by the `AgentsPipeline`'s `joiner`, is `SaleWithAgent`.
+
+#### 2. Creating a `JoinableTransformPipeline`
+
+The pipeline on the right-hand side of the `~>` operator must extend `JoinableTransformPipeline`. This abstract class requires you to implement a `joiner` method that defines how the join should be performed.
+
+The structure of `JoinableTransformPipeline` (typically found in `com.github.spark.etl.core.app.processor`) is as follows:
+
+```scala
+import org.apache.spark.sql.Encoder
+import scala.reflect.ClassTag
+import com.github.spark.etl.core.app.config.AppConfig // Or your specific config base
+import com.github.spark.etl.core.loader.Datasource // Path to your Datasource definition
+
+// Assuming TransformPipeline and JoinableSource are in scope
+// e.g., import com.github.spark.etl.core.app.processor.{TransformPipeline, JoinableSource, DatasourceJoiner}
+
+abstract class JoinableTransformPipeline[
+    I <: Product: Encoder: ClassTag,  // Input to this joinable pipeline (e.g., RawAgent)
+    O <: Product: Encoder: ClassTag,  // Output of this joinable pipeline (e.g., Agent) - THIS IS THE RIGHT SIDE OF JOIN
+    O1 <: Product: Encoder: ClassTag, // Output of the primary (left-side) pipeline (e.g., Sale) - THIS IS THE LEFT SIDE OF JOIN
+    Conf <: AppConfig                 // Configuration type
+  ](source: Datasource)
+    extends TransformPipeline[I, O, Conf](source)
+    with JoinableSource[O1, O] { // O1 is left (e.g. Sale), O is right (e.g. Agent)
+  
+  def joiner: DatasourceJoiner[O1, O] // Defines join logic between O1 (left) and O (right)
+}
+```
+- `I`: Input type for this joinable pipeline (e.g., `RawAgent`).
+- `O`: Output type for this joinable pipeline (e.g., `Agent`). This data will form the "right" side of the join.
+- `O1`: Output type of the pipeline it's being joined with (the "left" side, e.g., `Sale`).
+- `Conf`: The configuration class.
+
+#### 3. Implementing the `joiner`
+
+The `joiner` method must return an instance of `DatasourceJoiner[O1, O]`. This trait (defined within `TransformPipeline.scala` or a similar core file) requires you to specify:
+
+- `mappingColumn: ListMap[String, Column]`: Defines the schema of the DataFrame *after* the join. The keys are the final column names (e.g., fields of `SaleWithAgent`), and the values are Spark SQL `Column` expressions to derive these. You use `source("column_from_O1")` and `target("column_from_O")` to refer to columns from the left and right pre-join DataFrames, respectively.
+- `conditions: ListMap[String, String]`: Defines the join keys as a map where `Map("O1_column_name" -> "O_column_name")`.
+- `joinType: String` (optional, defaults to `"inner"`): Specifies the type of join (e.g., `"left_outer"`, `"inner"`, `"right_outer"`, `"full_outer"`).
+
+#### Example: `AgentsPipeline`
+
+Let's define an `AgentsPipeline` that processes `RawAgent` data into `Agent` data and is joinable with a `SalesPipeline` (which outputs `Sale`).
+
+**Hypothetical Data Models & Column Constants:**
+```scala
+// Case class for the final joined output (already shown above)
+// case class SaleWithAgent(...)
+
+// Assumed output from SalesPipeline (left side of join)
+case class Sale(sale_id: String, product_id: String, amount: Double, agent_id_fk: String /* foreign key to Agent */)
+object Sale { // Companion object for column name constants
+  val sale_idCol = "sale_id"
+  val product_idCol = "product_id"
+  val amountCol = "amount"
+  val agent_id_fkCol = "agent_id_fk"
+}
+
+// Input for AgentsPipeline
+case class RawAgent(id_agent: String, name_agent: String, region_identifier: String)
+// Output for AgentsPipeline (right side of join)
+case class Agent(agent_id: String, agent_name: String, agent_region: String)
+object Agent { // Companion object for column name constants
+  val idCol = "agent_id"
+  val nameCol = "agent_name"
+  val region_codeCol = "agent_region"
+}
+
+// Example Transformer for AgentsPipeline
+class RawAgentToAgentTransformer(implicit config: SalesConfig) extends Transformer[RawAgent, Agent] {
+  override def apply(raw: RawAgent): Agent = 
+    Agent(raw.id_agent, raw.name_agent, raw.region_identifier)
+  // Implement mappingCols() if you need DataFrame-level transformation logic for this transformer.
+  override def mappingCols(): ListMap[String, Column] = ListMap(
+    Agent.idCol -> col("id_agent"),
+    Agent.nameCol -> col("name_agent"),
+    Agent.region_codeCol -> col("region_identifier")
+  )
+}
+```
+
+**`AgentsPipeline` Implementation:**
+```scala
+import org.apache.spark.sql.{Column, SparkSession} // Assuming SparkSession might be needed by Filters/Loaders
+import org.apache.spark.sql.functions.col
+import scala.collection.immutable.ListMap
+import com.github.spark.etl.core.app.processor.{DatasourceJoiner, Filter, JoinableTransformPipeline, Loader, Transformer} // Adjust paths as needed
+// Assuming SalesConfig is defined and imported.
+// Assuming config.app.sources.agentsInput is a Datasource defined in your SalesConfig.
+
+class AgentsPipeline(implicit config: SalesConfig)
+  extends JoinableTransformPipeline[RawAgent, Agent, Sale, SalesConfig](
+    config.app.sources.agentsInput // Example: provides the Datasource for agents
+  ) {
+
+  override lazy val loader: Loader[RawAgent] = Loader.DefaultCsvLoader[RawAgent]() // Example loader
+  override lazy val preFilter: Filter[RawAgent, SalesConfig] = Filter.Identity()
+  override lazy val transformer: Transformer[RawAgent, Agent] = new RawAgentToAgentTransformer()
+  override lazy val postFilter: Filter[Agent, SalesConfig] = Filter.Identity()
+
+  override def joiner: DatasourceJoiner[Sale, Agent] = new DatasourceJoiner[Sale, Agent] {
+    // Sale is O1 (left DataFrame), Agent is O (right DataFrame)
+
+    override def mappingColumn: ListMap[String, Column] = ListMap(
+      // These keys must match the fields of the 'SaleWithAgent' case class
+      "sale_id"      -> source(Sale.sale_idCol),      // from Sale (left DataFrame, prefixed by 'source$')
+      "product_id"   -> source(Sale.product_idCol),   // from Sale (left)
+      "amount"       -> source(Sale.amountCol),       // from Sale (left)
+      "agent_id"     -> target(Agent.idCol),          // from Agent (right DataFrame, prefixed by 'target$')
+      "agent_name"   -> target(Agent.nameCol),       // from Agent (right)
+      "agent_region" -> target(Agent.region_codeCol) // from Agent (right)
+    )
+
+    override def conditions: ListMap[String, String] = ListMap(
+      Sale.agent_id_fkCol -> Agent.idCol // Join Sale.agent_id_fk with Agent.agent_id
+    )
+
+    override def joinType: String = "left_outer" // Example: keep all sales, add agent info if available
+  }
+}
+```
+The `source("col_name")` refers to columns from the `Sale` DataFrame (output of `SalesPipeline`), and `target("col_name")` refers to columns from the `Agent` DataFrame (output of `AgentsPipeline`). The `mappingColumn` defines the final structure of the `SaleWithAgent` output DataFrame.
+
+#### 4. The `DatasourceJoiner` Companion Object
+
+The framework also includes a `DatasourceJoiner` companion object, which you provided:
+```scala
+object DatasourceJoiner {
+  lazy val delimiter: Char      = '$'
+  lazy val sourcePrefix: String = s"source$delimiter"
+  lazy val targetPrefix: String = s"target$delimiter"
+
+  def prefixColumns(df: DataFrame, prefix: String): DataFrame = {
+    val existingColumns = df.columns
+    val aliasedColumns =
+      existingColumns.map(columnName => col(columnName).alias(s"$prefix$columnName"))
+    df.select(aliasedColumns: _*)
+  }
+
+  def renameColumnsAfterJoin(joinedDF: DataFrame, mapping: ListMap[String, Column]): DataFrame =
+    mapping.foldLeft(joinedDF) { case (accDF, (key, value)) => accDF.withColumn(key, value) }
+
+  // @deprecated def extractColumnsAfterJoin ... 
+}
+```
+This object provides constants (like `delimiter`, `sourcePrefix`, `targetPrefix`) and utility functions (`prefixColumns`, `renameColumnsAfterJoin`) that are used internally by the framework to manage column name disambiguation during the join process and to apply the final schema mapping. You typically don't interact with this companion object directly when defining your join logic within the `joiner` instance; it's part of the underlying mechanics.
+
+By following these patterns, you can effectively join data from different processing pipelines within the `spark-etl` framework.
